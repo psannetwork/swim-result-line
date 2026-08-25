@@ -48,8 +48,8 @@ const { syncData, checkResults } = require('./lib/monitor');
 // 高頻度タスク：結果チェック（30秒ごと）
 setInterval(checkResults, 30 * 1000);
 
-// 低頻度タスク：データ同期（30分ごと）
-setInterval(syncData, 30 * 60 * 1000);
+// 低頻度タスク：データ同期（6時間ごと）
+setInterval(syncData, 6 * 60 * 60 * 1000);
 
 // 即時初回実行
 syncData();

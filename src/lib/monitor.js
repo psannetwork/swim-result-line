@@ -6,12 +6,13 @@ const { isResultNotified, saveResultNotification } = require('./db/resultStore')
 const { sendLineNotification } = require('./notify');
 const { buildResultFlexMessage } = require('./messageBuilder');
 
-async function withRetry(fn, retries = 3, delay = 2000) {
+async function withRetry(fn, retries = 3, initialDelay = 2000) {
   for (let i = 0; i < retries; i++) {
     try {
       return await fn();
     } catch (err) {
       if (i === retries - 1) throw err;
+      const delay = initialDelay * Math.pow(2, i);
       console.warn(`[MONITOR] Attempt ${i + 1} failed, retrying in ${delay}ms...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
