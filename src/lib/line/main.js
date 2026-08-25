@@ -78,10 +78,32 @@ async function handleEvent(event) {
 
       if (text.startsWith('/delete')) {
           const athleteId = text.split(' ')[1];
+          if (athleteId === 'all') {
+              db.prepare('DELETE FROM athletes WHERE user_id = ?').run(userId);
+              return await client.replyMessage({
+                  replyToken: replyToken,
+                  messages: [{ type: 'text', text: 'すべての登録選手を削除しました。' }]
+              });
+          }
           db.prepare('DELETE FROM athletes WHERE id = ? AND user_id = ?').run(athleteId, userId);
           return await client.replyMessage({
               replyToken: replyToken,
-              messages: [{ type: 'text', text: `Deleted athlete ${athleteId}` }]
+              messages: [{ type: 'text', text: `選手 ID: ${athleteId} を削除しました。` }]
+          });
+      }
+
+      if (text.startsWith('/list')) {
+          const athletes = db.prepare('SELECT id, name FROM athletes WHERE user_id = ?').all(userId);
+          if (athletes.length === 0) {
+              return await client.replyMessage({
+                  replyToken: replyToken,
+                  messages: [{ type: 'text', text: '登録されている選手はいません。' }]
+              });
+          }
+          const list = athletes.map(a => `・${a.name} (ID: ${a.id})`).join('\n');
+          return await client.replyMessage({
+              replyToken: replyToken,
+              messages: [{ type: 'text', text: `登録選手一覧:\n${list}` }]
           });
       }
 
@@ -248,7 +270,7 @@ async function handleEvent(event) {
             replyToken: replyToken,
             messages: [{
                 type: 'text',
-                text: '利用可能なコマンド:\n/add {選手ID}\n/delete {選手ID}\n/game\n/game list {大会ID}\n/search {選手名}\n/searchGames {選手名}\n/help'
+                text: '利用可能なコマンド:\n/add {選手ID}\n/delete {選手ID}\n/delete all\n/list\n/game\n/game list {大会ID}\n/search {選手名}\n/searchGames {選手名}\n/help'
             }]
         });
       }
