@@ -19,7 +19,39 @@ async function withRetry(fn, retries = 3, initialDelay = 2000) {
   }
 }
 
-// 低頻度タスク：大会リストとレースリストの同期
+// レースリストから次回までの最適インターバルを算出
+async function calculateNextInterval(gameCode, date) {
+    try {
+        const raceList = await withRetry(() => SwimLiveScraper.getRaceListByGameDate(gameCode, date));
+        const sortedRaces = raceList.sort((a, b) => parseInt(a.program_id) - parseInt(b.program_id));
+        const nextRace = sortedRaces.find(r => !r.is_finished);
+
+        if (!nextRace) return 60 * 60 * 1000; // 1時間
+
+        if (nextRace.start_time) {
+            const [h, m] = nextRace.start_time.split(':');
+            const startTime = new Date();
+            startTime.setHours(h, m, 0, 0);
+
+            const diffMinutes = (startTime - new Date()) / (1000 * 60);
+
+            // 進行中、または遅延している、あるいは2分以内の場合は30秒間隔
+            if (diffMinutes < 2) return 30 * 1000; 
+            
+            // 15分前までなら1分間隔
+            if (diffMinutes < 15) return 60 * 1000;
+            
+            // それ以上先なら3分間隔
+            return 3 * 60 * 1000;
+        }
+
+        return 2 * 60 * 1000; // 推定
+    } catch (err) {
+        console.error(`[MONITOR] Interval calculation error:`, err);
+        return 5 * 60 * 1000;
+    }
+}
+
 async function syncData() {
   console.log('[MONITOR] Running data sync...');
   const games = await withRetry(() => getGames());
@@ -42,35 +74,26 @@ async function syncData() {
   }
 }
 
-// 高頻度タスク：レース結果の確定通知
 async function checkResults() {
   console.log('[MONITOR] Running high-frequency results check...');
   
-  // 1. 登録選手リストを取得
   const athletes = db.prepare('SELECT name, user_id FROM athletes').all();
-  
-  // 大会一覧を事前に取得してキャッシュ
   const games = await withRetry(() => getGames());
   const gameMap = new Map(games.map(g => [g.game_code, g.game_name]));
 
-  // 選手ごとにレース結果を検索して通知
   for (const athlete of athletes) {
     try {
-        // 2. 選手名で全大会を横断検索
         const foundRaces = await withRetry(() => SwimLiveScraper.searchAthleteAcrossGames(athlete.name));
         
         if (!foundRaces || foundRaces.length === 0) continue;
 
         for (const race of foundRaces) {
-            // レース名の構築と大会名の補完
             const gameName = gameMap.get(race.game_code) || '大会名不明';
             const raceName = `${race.gender_name || ''}${race.distance_name || ''}${race.swimming_style_name || ''} (${race.race_division_name || ''})`;
 
-            // 二重通知チェック
             const raceIdentifier = `${race.game_code}_${race.program_id}_${race.heat}`;
             if (await isResultNotified(raceIdentifier)) continue;
 
-            // 3. レース結果APIを呼び出し (Status 9 = 結果確定)
             const entryList = await withRetry(() => LiveApi.getRaceResults(race.game_code, race.program_id, race.heat, 9));
             
             if (!entryList || !Array.isArray(entryList)) continue;
@@ -81,10 +104,8 @@ async function checkResults() {
                 return names.some(n => n && n.replace(/\s+/g, '').includes(normalizedTargetName));
             });
 
-            // 参加者が見つからない、またはタイム（result_time）がない場合は通知しない
             if (!foundParticipant || !foundParticipant.result_time) continue;
 
-            // メッセージ構築
             const flexMessage = buildResultFlexMessage({
                 meetName: gameName,
                 raceTitle: raceName,
@@ -93,13 +114,7 @@ async function checkResults() {
                 targetSwimmerName: athlete.name,
             });
 
-            // デバッグ：生成されたJSONを確認
-            console.log(JSON.stringify(flexMessage, null, 2));
-
-            // 通知
             await sendLineNotification(athlete.user_id, flexMessage);
-
-            // DB記録
             await saveResultNotification(raceIdentifier);
             console.log(`[Result] Notified user ${athlete.user_id} for race: ${raceIdentifier} (${gameName} - ${raceName}, Time: ${foundParticipant.result_time})`);
         }
@@ -109,4 +124,21 @@ async function checkResults() {
   }
 }
 
-module.exports = { syncData, checkResults };
+async function startMonitoringLoop(task, getInterval) {
+    while (true) {
+        const start = Date.now();
+        try {
+            await task();
+        } catch (err) {
+            console.error(`[MONITOR] Task error:`, err);
+            await new Promise(r => setTimeout(r, 60 * 1000));
+            continue;
+        }
+        
+        const interval = await getInterval(); 
+        console.log(`[MONITOR] Next task in ${interval}ms`);
+        await new Promise(r => setTimeout(r, interval));
+    }
+}
+
+module.exports = { syncData, checkResults, startMonitoringLoop, calculateNextInterval };
