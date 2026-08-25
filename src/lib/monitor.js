@@ -5,12 +5,22 @@ const { SwimLiveScraper } = require('swim-live-scraper');
 const { isResultNotified, saveResultNotification } = require('./db/resultStore');
 const { sendLineNotification } = require('./notify');
 const { buildResultFlexMessage } = require('./messageBuilder');
+const scraperRateLimit = require('./scraperRateLimit');
 
-async function withRetry(fn, retries = 3, initialDelay = 2000) {
+async function withRetry(fn, retries = 3, initialDelay = 5000) { // 初期遅延を5秒に増加
   for (let i = 0; i < retries; i++) {
     try {
+      // 毎回スクレイピング前にレート制限をチェック
+      while (!scraperRateLimit(3)) { // 1分間に3回まで（厳格化）
+        console.log('[MONITOR] Rate limit reached, waiting...');
+        await new Promise(resolve => setTimeout(resolve, 30000)); // 30秒待機
+      }
       return await fn();
     } catch (err) {
+      if ((err.message && err.message.includes('403')) || (err.status === 403)) {
+        console.error(`[MONITOR] 403 Forbidden detected! Backing off for 2 hours.`);
+        await new Promise(resolve => setTimeout(resolve, 2 * 60 * 60 * 1000)); // 2時間待機
+      }
       if (i === retries - 1) throw err;
       const delay = initialDelay * Math.pow(2, i);
       console.warn(`[MONITOR] Attempt ${i + 1} failed, retrying in ${delay}ms...`);
@@ -35,17 +45,17 @@ async function calculateNextInterval(gameCode, date) {
 
             const diffMinutes = (startTime - new Date()) / (1000 * 60);
 
-            // 進行中、または遅延している、あるいは2分以内の場合は30秒間隔
-            if (diffMinutes < 2) return 30 * 1000; 
+            // 進行中、または遅延している、あるいは2分以内の場合は3分間隔（緩和）
+            if (diffMinutes < 2) return 3 * 60 * 1000; 
             
-            // 15分前までなら1分間隔
-            if (diffMinutes < 15) return 60 * 1000;
+            // 15分前までなら5分間隔（緩和）
+            if (diffMinutes < 15) return 5 * 60 * 1000;
             
-            // それ以上先なら3分間隔
-            return 3 * 60 * 1000;
+            // それ以上先なら10分間隔（緩和）
+            return 10 * 60 * 1000;
         }
 
-        return 2 * 60 * 1000; // 推定
+        return 10 * 60 * 1000; // 推定
     } catch (err) {
         console.error(`[MONITOR] Interval calculation error:`, err);
         return 5 * 60 * 1000;
