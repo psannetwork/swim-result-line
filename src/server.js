@@ -43,55 +43,17 @@ app.get('/', (req, res) => {
   res.send('LINE Bot is running!');
 });
 
-// Periodic task (check every minute)
-setInterval(async () => {
-  console.log('Running dynamic background job...');
-  const games = await getGames();
-  const inProgressGames = games.filter(g => g.status_label === '開催中');
-  const athletes = db.prepare('SELECT * FROM athletes').all();
-  
-  if (athletes.length === 0 || inProgressGames.length === 0) return;
+const { syncData, checkResults } = require('./lib/monitor');
 
-  for (const game of inProgressGames) {
-      const datePart = game.period.split(' ')[0].replace('.', '-');
-      const fullDate = `2026-${datePart}`;
-      
-      try {
-        // 大会ごとのレース一覧を取得
-        const raceList = await require('swim-live-scraper').SwimLiveScraper.getRaceListByGameDate(game.game_code, fullDate);
-        
-        for (const athlete of athletes) {
-            // 選手が出場するレースを特定
-            const athleteRaces = raceList.filter(r => r.race_name.includes(athlete.name)); // 簡易フィルタリング
-            
-            for (const race of athleteRaces) {
-                // レース結果を取得（タイムがあれば通知）
-                const results = await require('swim-live-scraper').SwimLiveScraper.getRaceResults(race.race_code);
-                const athleteResult = results.find(r => r.swimmer_name === athlete.name && r.time);
-                
-                if (athleteResult) {
-                    // 通知済みか確認
-                    const notified = db.prepare('SELECT 1 FROM notifications WHERE athlete_id = ? AND race_code = ?').get(athlete.id, race.race_code);
-                    if (notified) continue;
+// 高頻度タスク：結果チェック（30秒ごと）
+setInterval(checkResults, 30 * 1000);
 
-                    await client.pushMessage({
-                        to: athlete.user_id,
-                        messages: [{
-                            type: 'text',
-                            text: `【速報】${game.game_name}\n${athlete.name} 選手: ${athleteResult.time}`
-                        }]
-                    });
-                    
-                    db.prepare('INSERT INTO notifications (athlete_id, race_code, notified_at) VALUES (?, ?, ?)')
-                      .run(athlete.id, race.race_code, Date.now());
-                }
-            }
-        }
-      } catch (err) {
-          console.error(`Error processing game ${game.game_code}:`, err);
-      }
-  }
-}, 60 * 1000); // 1分間隔に変更
+// 低頻度タスク：データ同期（30分ごと）
+setInterval(syncData, 30 * 60 * 1000);
+
+// 即時初回実行
+syncData();
+checkResults();
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
