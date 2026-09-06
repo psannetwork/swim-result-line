@@ -1,46 +1,25 @@
-const db = require('./db/index');
+// Scraper用のレート制限を管理する（メモリベース・シンプル版）
+// 失敗時のカウント問題を回避するため、単純な「最小リクエスト間隔」方式を採用
 
-// Scraper用のレート制限を管理する
-const scraperRateLimit = (limitPerMinute = 10) => {
+let lastRequestTime = 0;
+const MIN_INTERVAL_MS = 3000; // リクエスト間隔は最低3秒空ける（1分20回相当だが、安全マージン込み）
+
+/**
+ * レート制限をチェックし、必要であれば待機するPromiseを返す
+ * @param {number} _limitPerMinute - 互換性のために残すが無視される
+ * @returns {Promise<void>} 待機が必要な場合は解決後に返る
+ */
+const scraperRateLimit = async (_limitPerMinute = 10) => {
   const now = Date.now();
-  const oneMinuteAgo = now - 60 * 1000;
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS scraper_rate_limits (
-      id TEXT PRIMARY KEY,
-      last_minute_count INTEGER DEFAULT 0,
-      last_reset_minute INTEGER
-    );
-  `);
-
-  let record = db.prepare('SELECT * FROM scraper_rate_limits WHERE id = ?').get('global');
-
-  if (!record) {
-    record = {
-      id: 'global',
-      last_minute_count: 0,
-      last_reset_minute: now
-    };
-    db.prepare('INSERT INTO scraper_rate_limits (id, last_minute_count, last_reset_minute) VALUES (?, ?, ?)').run(
-      record.id, record.last_minute_count, record.last_reset_minute
-    );
+  const elapsed = now - lastRequestTime;
+  
+  if (elapsed < MIN_INTERVAL_MS) {
+    const waitTime = MIN_INTERVAL_MS - elapsed;
+    // デバッグログは出さない（ノイズになるため）
+    await new Promise(resolve => setTimeout(resolve, waitTime));
   }
-
-  // Reset counter
-  if (now - record.last_reset_minute > 60 * 1000) {
-    record.last_minute_count = 0;
-    record.last_reset_minute = now;
-  }
-
-  if (record.last_minute_count >= limitPerMinute) {
-    return false;
-  }
-
-  db.prepare('UPDATE scraper_rate_limits SET last_minute_count = last_minute_count + 1, last_reset_minute = ? WHERE id = ?').run(
-    record.last_reset_minute, 'global'
-  );
-
-  return true;
+  
+  lastRequestTime = Date.now();
 };
 
 module.exports = scraperRateLimit;

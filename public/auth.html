@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini APIキー設定</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 420px;
+      width: 100%;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    }
+    h1 {
+      font-size: 20px;
+      margin-bottom: 8px;
+      color: #333;
+    }
+    p.desc {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 24px;
+      line-height: 1.6;
+    }
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: #333;
+    }
+    input[type="password"] {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 16px;
+      margin-bottom: 16px;
+      transition: border-color 0.2s;
+    }
+    input[type="password"]:focus {
+      outline: none;
+      border-color: #4CAF50;
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #43A047; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .message {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      text-align: center;
+      display: none;
+    }
+    .message.success { display: block; background: #E8F5E9; color: #2E7D32; }
+    .message.error { display: block; background: #FFEBEE; color: #C62828; }
+    a.link {
+      display: inline-block;
+      margin-top: 12px;
+      font-size: 13px;
+      color: #1976D2;
+      text-decoration: none;
+    }
+    a.link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🔑 Gemini APIキー設定</h1>
+    <p class="desc">
+      AI機能を使用するには、ご自身のGoogle AI StudioのAPIキーが必要です。<br>
+      キーは暗号化して安全に保存されます。
+    </p>
+    <form id="authForm">
+      <label for="apiKey">Gemini API Key</label>
+      <input type="password" id="apiKey" name="apiKey" placeholder="AIzaSy..." required autocomplete="off">
+      <button type="submit" id="submitBtn">保存する</button>
+    </form>
+    <div id="message" class="message"></div>
+    <a class="link" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">
+      → Google AI StudioでAPIキーを取得
+    </a>
+  </div>
+
+  <script>
+    const form = document.getElementById('authForm');
+    const msgEl = document.getElementById('message');
+    const btn = document.getElementById('submitBtn');
+
+    // URLからトークンを取得
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+
+    if (!token) {
+      msgEl.textContent = '無効なリンクです。LINEボットから再度/authを実行してください。';
+      msgEl.className = 'message error';
+      btn.disabled = true;
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!token) return;
+
+      const apiKey = document.getElementById('apiKey').value.trim();
+      if (!apiKey) return;
+
+      btn.disabled = true;
+      btn.textContent = '保存中...';
+      msgEl.style.display = 'none';
+
+      try {
+        const res = await fetch('/auth/callback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, apiKey })
+        });
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+          msgEl.innerHTML = '✅ APIキーを保存しました！<br><br><a href="line://" style="display:inline-block;padding:12px 24px;background:#06C755;color:white;border-radius:8px;text-decoration:none;font-weight:bold;">LINEアプリを開く</a>';
+          msgEl.className = 'message success';
+          document.getElementById('apiKey').value = '';
+        } else {
+          msgEl.textContent = data.error || '保存に失敗しました。';
+          msgEl.className = 'message error';
+        }
+      } catch (err) {
+        msgEl.textContent = '通信エラーが発生しました。';
+        msgEl.className = 'message error';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '保存する';
+      }
+    });
+  </script>
+</body>
+</html>

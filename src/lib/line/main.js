@@ -2,6 +2,8 @@ const { messagingApi } = require('@line/bot-sdk');
 const db = require('../db');
 const rateLimit = require('../rateLimit');
 const { getGames } = require('../scraper/main');
+const { processPrompt } = require('../ai/agent');
+const authService = require('../auth/service');
 
 const client = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
@@ -22,7 +24,20 @@ async function handleEvent(event) {
 
   const text = event.message.text;
   const replyToken = event.replyToken;
-  const userId = event.source.userId || event.source.groupId || event.source.roomId;
+  
+  // コンテキストIDの解決: グループ/ルームならそのID、個人ならユーザーID
+  // これにより、登録データが個人/グループで適切に分離される
+  let contextId;
+  if (event.source.type === 'group') {
+      contextId = event.source.groupId;
+  } else if (event.source.type === 'room') {
+      contextId = event.source.roomId;
+  } else {
+      contextId = event.source.userId;
+  }
+  
+  // 後方互換性のため userId 変数も維持（ただし中身は contextId と同じ）
+  const userId = contextId;
 
   if (!rateLimit(userId)) {
     return client.replyMessage({
@@ -265,12 +280,78 @@ async function handleEvent(event) {
         return;
       }
 
+      // /auth コマンド: APIキー設定（個人/グループ共通だが、キーは個人IDに紐づく）
+      if (text.startsWith('/auth')) {
+        // グループでも個人でも、APIキーは常に「発言者の個人ID」に紐づける
+        const personalUserId = event.source.userId;
+        
+        if (!personalUserId) {
+           return await client.replyMessage({
+             replyToken,
+             messages: [{ type: 'text', text: 'ユーザーIDが取得できませんでした。' }]
+           });
+        }
+
+        const token = authService.createAuthToken(personalUserId);
+        const hostUrl = process.env.HOST_URL || `http://localhost:${process.env.PORT || 3000}`;
+        const authUrl = `${hostUrl}/auth?token=${token}`;
+
+        return await client.replyMessage({
+          replyToken,
+          messages: [{
+            type: 'text',
+            text: `🔑 Gemini APIキー設定\n\n以下のリンクからAPIキーを入力してください（5分間有効）:\n${authUrl}\n\n※ APIキーはあなた個人のアカウントに紐づきます`
+          }]
+        });
+      }
+
+      // /ai コマンド: AIエージェントとの対話
+      if (text.startsWith('/ai')) {
+        const query = text.replace(/^\/ai\s*/, '').trim();
+        if (!query) {
+          return await client.replyMessage({
+            replyToken,
+            messages: [{ type: 'text', text: '使い方: /ai {質問}\n例: /ai 今開催中の大会を教えて' }]
+          });
+        }
+
+        // APIキーの確認（常に発言者の個人IDを使用）
+        const personalUserId = event.source.userId;
+        const apiKey = authService.getApiKey(personalUserId);
+        if (!apiKey) {
+          return await client.replyMessage({
+            replyToken,
+            messages: [{ type: 'text', text: 'Gemini APIキーが設定されていません。\n/auth を実行してAPIキーを設定してください。' }]
+          });
+        }
+
+        try {
+          // contextId (userId) はDBスコープ用、apiKey は個人用
+          const aiResponse = await processPrompt(userId, apiKey, query);
+          // LINEのメッセージ上限(5000文字)を考慮して切り詰め
+          const safeResponse = aiResponse.length > 4900
+            ? aiResponse.substring(0, 4900) + '\n\n...（長すぎるため省略）'
+            : aiResponse;
+
+          return await client.replyMessage({
+            replyToken,
+            messages: [{ type: 'text', text: safeResponse }]
+          });
+        } catch (err) {
+          console.error('[AI] Error:', err);
+          return await client.replyMessage({
+            replyToken,
+            messages: [{ type: 'text', text: 'AI応答中にエラーが発生しました。APIキーが正しいか確認してください。' }]
+          });
+        }
+      }
+
       if (text.startsWith('/help')) {
         return await client.replyMessage({
             replyToken: replyToken,
             messages: [{
                 type: 'text',
-                text: '利用可能なコマンド:\n/add {選手ID}\n/delete {選手ID}\n/delete all\n/list\n/game\n/game list {大会ID}\n/search {選手名}\n/searchGames {選手名}\n/help'
+                text: '利用可能なコマンド:\n/ai {質問} - AIに質問\n/auth - Gemini APIキー設定\n/add {選手ID}\n/delete {選手ID}\n/delete all\n/list\n/game\n/game list {大会ID}\n/search {選手名}\n/searchGames {選手名またはID}\n/help'
             }]
         });
       }
